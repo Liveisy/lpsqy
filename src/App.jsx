@@ -1,33 +1,52 @@
 import React, { useState } from 'react';
 
+// 工具函数：转义正则特殊字符
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// 解析所有a和button跳转点
 function parseLinks(html) {
-  const parser = new DOMParser();
+  const parser = new window.DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
-  // 提取a标签
-  const aTags = Array.from(doc.querySelectorAll('a')).map(a => ({
-    name: a.innerText.trim() || a.getAttribute('aria-label') || 'a标签',
-    url: a.href || a.getAttribute('href') || '',
-    type: 'a'
-  }));
-  // 提取button标签
-  const btnTags = Array.from(doc.querySelectorAll('button')).map(btn => ({
-    name: btn.innerText.trim() || btn.getAttribute('aria-label') || 'button',
-    url: btn.getAttribute('onclick') || '',
-    type: 'button'
-  }));
-  return [...aTags, ...btnTags].filter(item => item.url);
+  // a标签
+  const aTags = Array.from(doc.querySelectorAll('a')).filter(a => a.hasAttribute('href'));
+  // button标签（假设用data-href或onclick跳转）
+  const btnTags = Array.from(doc.querySelectorAll('button')).filter(btn => btn.hasAttribute('data-href') || btn.hasAttribute('onclick'));
+
+  const links = [];
+  aTags.forEach(a => {
+    links.push({
+      type: 'a',
+      name: a.innerText.trim() || a.getAttribute('aria-label') || 'a标签',
+      originalUrl: a.getAttribute('href'),
+      url: a.getAttribute('href'),
+    });
+  });
+  btnTags.forEach(btn => {
+    let href = btn.getAttribute('data-href') || btn.getAttribute('onclick') || '';
+    links.push({
+      type: 'button',
+      name: btn.innerText.trim() || btn.getAttribute('aria-label') || 'button',
+      originalUrl: href,
+      url: href,
+    });
+  });
+  return links;
 }
 
 export default function App() {
   const [targetUrl, setTargetUrl] = useState('');
   const [links, setLinks] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [originalHtml, setOriginalHtml] = useState('');
 
   const handleGo = async () => {
     setLoading(true);
     try {
       const res = await fetch(targetUrl);
       const html = await res.text();
+      setOriginalHtml(html);
       const foundLinks = parseLinks(html);
       setLinks(foundLinks);
     } catch (e) {
@@ -41,23 +60,27 @@ export default function App() {
   };
 
   const handleFinish = () => {
-    // 生成简单的index.html
-    const html = `
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <title>导出页面</title>
-</head>
-<body>
-  <h2>跳转点列表</h2>
-  <ul>
-    ${links.map(l => `<li>${l.name}: <a href="${l.url}" target="_blank">${l.url}</a></li>`).join('')}
-  </ul>
-</body>
-</html>
-    `.trim();
-    const blob = new Blob([html], { type: 'text/html' });
+    let newHtml = originalHtml;
+    links.forEach(link => {
+      if (link.type === 'a') {
+        // 替换a标签href
+        const reg = new RegExp(`(<a[^>]*?href=["'])${escapeRegExp(link.originalUrl)}(["'][^>]*?>)`, 'g');
+        newHtml = newHtml.replace(reg, `$1${link.url}$2`);
+      } else if (link.type === 'button') {
+        // 替换button的data-href或onclick
+        if (link.originalUrl && link.originalUrl.startsWith('http')) {
+          // data-href
+          const reg = new RegExp(`(<button[^>]*?data-href=["'])${escapeRegExp(link.originalUrl)}(["'][^>]*?>)`, 'g');
+          newHtml = newHtml.replace(reg, `$1${link.url}$2`);
+        } else {
+          // onclick
+          const reg = new RegExp(`(<button[^>]*?onclick=["'])${escapeRegExp(link.originalUrl)}(["'][^>]*?>)`, 'g');
+          newHtml = newHtml.replace(reg, `$1${link.url}$2`);
+        }
+      }
+    });
+    // 下载
+    const blob = new Blob([newHtml], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -88,7 +111,7 @@ export default function App() {
       <div>
         {links.map((l, idx) => (
           <div key={idx} style={{ display: 'flex', alignItems: 'center', margin: '18px 0', justifyContent: 'center' }}>
-            <span style={{ width: 120, textAlign: 'right', fontSize: 20, marginRight: 10 }}>{l.name || 'Purchase'}</span>
+            <span style={{ width: 180, textAlign: 'right', fontSize: 20, marginRight: 10 }}>{l.name || (l.type === 'a' ? 'Purchase' : 'Button')}</span>
             <input
               style={{ width: 400, padding: 8, fontSize: 16, marginRight: 20, border: '1px solid #ccc', borderRadius: 4 }}
               value={l.url}
